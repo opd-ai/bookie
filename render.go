@@ -1,5 +1,5 @@
 // Package bookcompiler provides functionality for converting markdown files into PDF documents
-package bookcompiler
+package bookie
 
 import (
 	"fmt"

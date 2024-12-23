@@ -1,6 +1,6 @@
 // Package bookcompiler provides functionality for converting markdown files into PDF documents
 // with support for chapters, table of contents, and styled text formatting.
-package bookcompiler
+package bookie
 
 import "github.com/jung-kurt/gofpdf"
 

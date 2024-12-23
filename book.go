@@ -1,4 +1,4 @@
-package bookcompiler
+package bookie
 
 import (
 	"fmt"
