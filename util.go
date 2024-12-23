@@ -1,4 +1,6 @@
-// Package bookcompiler provides utilities for PDF document generation from markdown files
+// Package bookie provides utilities for converting markdown documents into PDF files.
+// It supports chapter organization, table of contents generation, and rich text formatting.
+// The package uses blackfriday for markdown parsing and gofpdf for PDF generation.
 package bookie
 
 import (
@@ -10,23 +12,33 @@ import (
 	"golang.org/x/net/html"
 )
 
+// Common constants for file extensions and patterns
+const (
+	jpgExtension  = ".jpg"
+	jpegExtension = ".jpeg"
+)
+
 // getString extracts all text content from a markdown node by walking its tree.
+// It concatenates content from Text nodes while preserving document order and
+// ignoring formatting elements.
 //
 // Parameters:
-//   - node: A blackfriday Node pointer containing markdown content
+//   - node: A blackfriday.Node pointer representing the root of the markdown tree.
+//     May be nil, in which case an empty string is returned.
 //
 // Returns:
-//   - A string containing all concatenated text from the node and its children
+//   - A string containing the concatenated text from all Text nodes in the tree.
 //
-// The function walks the entire node tree and only collects Text type nodes,
-// ignoring formatting and structural elements.
+// Related: blackfriday.Node, blackfriday.WalkStatus
 func getString(node *blackfriday.Node) string {
-	// Added nil check for safety while maintaining return signature
 	if node == nil {
 		return ""
 	}
 
+	// Pre-allocate builder for better performance
 	var result strings.Builder
+	result.Grow(64) // Reasonable initial capacity for typical markdown content
+
 	node.Walk(func(n *blackfriday.Node, entering bool) blackfriday.WalkStatus {
 		if entering && n.Type == blackfriday.Text && n.Literal != nil {
 			result.Write(n.Literal)
@@ -37,17 +49,27 @@ func getString(node *blackfriday.Node) string {
 }
 
 // extractEpisodeNumber parses a numerical episode identifier from a file path.
+// It looks for paths containing "Episode" followed by digits (e.g., "Episode01").
 //
 // Parameters:
-//   - path: A string containing a file or directory path
+//   - path: A file or directory path string. May be empty, in which case 0 is returned.
+//     The path is expected to contain a base name with the format "EpisodeNN" where
+//     NN is a number.
 //
 // Returns:
-//   - An integer representing the episode number, or 0 if no valid number is found
+//   - An integer representing the episode number, or 0 if:
+//   - The path is empty
+//   - No episode number is found
+//   - The number cannot be parsed
 //
-// The function expects paths containing "Episode" followed by digits (e.g., "Episode01").
-// It returns 0 for paths without a valid episode number or with parsing errors.
+// Example paths:
+//
+//	"Episode01" -> 1
+//	"Episode42/content" -> 42
+//	"invalid" -> 0
+//
+// Related: episodeNumberPattern
 func extractEpisodeNumber(path string) int {
-	// Added empty path check while maintaining return signature
 	if path == "" {
 		return 0
 	}
@@ -58,26 +80,28 @@ func extractEpisodeNumber(path string) int {
 	}
 
 	var num int
-	// Simplified error handling while maintaining behavior
 	if _, err := fmt.Sscanf(matches[1], "%d", &num); err != nil {
 		return 0
 	}
 	return num
 }
 
-// findParent searches up the HTML node tree for a parent with the specified tag.
+// findParent locates the nearest ancestor node with a specified HTML tag.
+// The search is case-sensitive and traverses up the DOM tree.
 //
 // Parameters:
-//   - n: The HTML node to start searching from
-//   - tag: The tag name to search for (case-sensitive)
+//   - n: The starting HTML node. If nil, returns nil.
+//   - tag: The HTML tag name to search for (e.g., "div", "table").
+//     Empty tag returns nil.
 //
 // Returns:
-//   - A pointer to the first matching parent node, or nil if none is found
+//   - The first ancestor node matching the tag, or nil if:
+//   - The input node is nil
+//   - The tag is empty
+//   - No matching ancestor is found
 //
-// The search continues up the tree until either a matching parent is found
-// or the root is reached.
+// Related: html.Node, html.ElementNode
 func findParent(n *html.Node, tag string) *html.Node {
-	// Added input validation while maintaining return signature
 	if n == nil || tag == "" {
 		return nil
 	}
@@ -90,17 +114,17 @@ func findParent(n *html.Node, tag string) *html.Node {
 	return nil
 }
 
-// countPreviousSiblings counts element nodes that precede the given node.
+// countPreviousSiblings counts HTML element nodes that precede the given node.
+// Only considers ElementNode types, ignoring text and comment nodes.
 //
 // Parameters:
-//   - n: The HTML node to count siblings before
+//   - n: The HTML node to count siblings before. If nil, returns 0.
 //
 // Returns:
-//   - The number of element-type siblings that come before this node
+//   - The count of ElementNode siblings that come before this node.
 //
-// Only counts nodes of Type ElementNode, ignoring text and comment nodes.
+// Related: html.Node, html.ElementNode
 func countPreviousSiblings(n *html.Node) int {
-	// Added nil check while maintaining return signature
 	if n == nil {
 		return 0
 	}
@@ -114,18 +138,21 @@ func countPreviousSiblings(n *html.Node) int {
 	return count
 }
 
-// getAttr retrieves the value of a specified attribute from an HTML node.
+// getAttr retrieves an attribute value from an HTML node by key.
+// Commonly used for extracting href, src, class, and other HTML attributes.
 //
 // Parameters:
-//   - n: The HTML node to examine
-//   - key: The attribute name to look for
+//   - n: The HTML node to examine. If nil, returns empty string.
+//   - key: The attribute name to find. If empty, returns empty string.
 //
 // Returns:
-//   - The attribute value as a string, or an empty string if not found
+//   - The attribute value as a string, or empty string if:
+//   - The node is nil
+//   - The key is empty
+//   - The attribute is not found
 //
-// Used primarily for extracting href, src, and other common HTML attributes.
+// Related: html.Node, html.Attribute
 func getAttr(n *html.Node, key string) string {
-	// Added input validation while maintaining return signature
 	if n == nil || key == "" {
 		return ""
 	}
@@ -138,23 +165,25 @@ func getAttr(n *html.Node, key string) string {
 	return ""
 }
 
-// getTextContent extracts all text content from an HTML node and its children.
+// getTextContent extracts all text content from an HTML node tree.
+// Concatenates text from all TextNode descendants in document order.
 //
 // Parameters:
-//   - n: The HTML node to extract text from
+//   - n: The root HTML node to extract text from. If nil, returns empty string.
 //
 // Returns:
-//   - A string containing all concatenated text content
+//   - A string containing all text content from the node tree.
 //
-// Recursively traverses the entire node tree, collecting text from TextNode types
-// while preserving the document order.
+// Related: html.Node, html.TextNode
 func getTextContent(n *html.Node) string {
-	// Added nil check while maintaining return signature
 	if n == nil {
 		return ""
 	}
 
+	// Pre-allocate builder for better performance
 	var text strings.Builder
+	text.Grow(128) // Reasonable initial capacity for typical HTML content
+
 	var extract func(*html.Node)
 	extract = func(n *html.Node) {
 		if n.Type == html.TextNode {
@@ -168,18 +197,20 @@ func getTextContent(n *html.Node) string {
 	return text.String()
 }
 
-// isJPEGImage checks if the given file path ends with a JPEG extension.
+// isJPEGImage checks if a file path has a JPEG image extension.
+// The check is case-insensitive and handles both .jpg and .jpeg extensions.
 //
 // Parameters:
-//   - src: The file path to check
+//   - src: The file path to check. If empty, returns false.
 //
 // Returns:
-//   - true if the file has a .jpg or .jpeg extension, false otherwise
+//   - true if the file path ends with .jpg or .jpeg (case-insensitive)
+//   - false if the path is empty or has a different extension
 func isJPEGImage(src string) bool {
-	// Added nil check while maintaining return signature
 	if src == "" {
 		return false
 	}
 	src = strings.ToLower(src)
-	return strings.HasSuffix(src, ".jpg") || strings.HasSuffix(src, ".jpeg")
+	return strings.HasSuffix(src, jpgExtension) ||
+		strings.HasSuffix(src, jpegExtension)
 }

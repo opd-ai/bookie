@@ -5,280 +5,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/net/html"
 )
 
-// Constants for styling to improve maintainability and consistency
-const (
-	defaultLineHeight = 5.0
-	defaultFontSize   = 12.0
-	indentWidth       = 10.0
-	pageWidth         = 190.0
-)
-
-// Font styles for easier maintenance
-const (
-	fontStyleNormal = ""
-	fontStyleBold   = "B"
-	fontStyleItalic = "I"
-)
-
-// renderNode processes a single HTML node for PDF rendering.
-func (bc *BookCompiler) renderNode(n *html.Node) error {
-	if n == nil {
-		return nil
-	}
-
-	// Add spacing check before rendering
-	if bc.needsSpacing(n) {
-		bc.pdf.Ln(defaultLineHeight)
-	}
-
-	return bc.renderHTML(n)
-}
-
-// renderChildren processes all direct children of an HTML node.
-func (bc *BookCompiler) renderChildren(n *html.Node) error {
-	if n == nil {
-		return nil
-	}
-
-	// Improved error handling with context
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if err := bc.renderNode(c); err != nil {
-			return fmt.Errorf("failed to render child node: %w", err)
-		}
-	}
-	return nil
-}
-
-// TextState encapsulates PDF text styling state
-type TextState struct {
-	FontFamily string
-	Style      string
-	Size       float64
-	Alignment  string
-}
-
-// renderHTML converts an HTML node and its siblings to PDF format.
-func (bc *BookCompiler) renderHTML(n *html.Node) error {
-	// Save current text state for restoration
-	currentState := TextState{
-		FontFamily: bc.textFont,
-		Style:      fontStyleNormal,
-		Size:       defaultFontSize,
-		Alignment:  "L",
-	}
-	defer bc.restoreTextState(currentState)
-
-	switch n.Type {
-	case html.TextNode:
-		return bc.renderTextNode(n)
-	case html.ElementNode:
-		return bc.renderElement(n)
-	}
-
-	// Process siblings
-	return bc.renderSiblings(n)
-}
-
-// renderTextNode handles text content
-func (bc *BookCompiler) renderTextNode(n *html.Node) error {
-	text := bc.cleanText(n.Data)
-	if strings.TrimSpace(text) != "" {
-		bc.pdf.Write(defaultLineHeight, text)
-	}
-	return nil
-}
-
-// renderElement handles HTML elements with appropriate styling
-func (bc *BookCompiler) renderElement(n *html.Node) error {
-	switch n.Data {
-	case "h1", "h2", "h3", "h4", "h5", "h6":
-		return bc.renderHeading(n)
-	case "p", "blockquote", "pre", "code":
-		return bc.renderBlockElement(n)
-	case "ul", "ol", "li":
-		return bc.renderListElement(n)
-	case "em", "i", "strong", "b", "u":
-		return bc.renderFormattingElement(n)
-	case "table":
-		return bc.renderTable(n)
-	case "a":
-		return bc.renderLink(n)
-	case "img":
-		return bc.renderImage(n)
-	case "hr":
-		return bc.renderHorizontalRule()
-	}
-	return nil
-}
-
-func (bc *BookCompiler) getPageHeight() float64 {
-	_, height, _ := bc.pdf.PageSize(0)
-	return height
-}
-
-// renderHeading handles different heading levels
-func (bc *BookCompiler) renderHeading(n *html.Node) error {
-	// Ensure headings don't start too close to bottom of page
-	if bc.pdf.GetY() > bc.getPageHeight()-100 {
-		bc.pdf.AddPage()
-	}
-
-	switch n.Data {
-	case "h1":
-		bc.pdf.AddPage()
-		bc.setHeadingStyle(24, 20)
-	case "h2":
-		bc.pdf.Ln(20)
-		bc.setHeadingStyle(20, 15)
-	case "h3":
-		bc.pdf.Ln(15)
-		bc.setHeadingStyle(16, 10)
-	default: // h4, h5, h6
-		bc.pdf.Ln(10)
-		bc.setHeadingStyle(14, 8)
-	}
-
-	if err := bc.renderChildren(n); err != nil {
-		return err
-	}
-	bc.pdf.Ln(defaultLineHeight * 2)
-	return nil
-}
-
-// renderBlockElement handles block-level elements
-func (bc *BookCompiler) renderBlockElement(n *html.Node) error {
-	// Check if we need a page break
-	if bc.pdf.GetY() > bc.getPageHeight()-50 {
-		bc.pdf.AddPage()
-	}
-
-	switch n.Data {
-	case "blockquote":
-		bc.pdf.Ln(defaultLineHeight)
-		err := bc.renderBlockquote(n)
-		bc.pdf.Ln(defaultLineHeight)
-		return err
-	case "pre", "code":
-		bc.pdf.Ln(defaultLineHeight)
-		err := bc.renderCode(n)
-		bc.pdf.Ln(defaultLineHeight)
-		return err
-	default: // p
-		bc.pdf.SetFont(bc.textFont, fontStyleNormal, defaultFontSize)
-		bc.pdf.Ln(defaultLineHeight / 2)
-		if err := bc.renderChildren(n); err != nil {
-			return err
-		}
-		bc.pdf.Ln(defaultLineHeight)
-	}
-	return nil
-}
-
-// Helper methods for consistent styling and behavior
-func (bc *BookCompiler) setHeadingStyle(size, spacing float64) {
-	bc.pdf.SetFont(bc.chapterFont, fontStyleBold, size)
-	bc.pdf.Ln(spacing)
-}
-
-func (bc *BookCompiler) restoreTextState(state TextState) {
-	bc.pdf.SetFont(state.FontFamily, state.Style, state.Size)
-}
-
-// renderHorizontalRule draws a horizontal line
-func (bc *BookCompiler) renderHorizontalRule() error {
-	x := bc.pdf.GetX()
-	y := bc.pdf.GetY()
-	bc.pdf.Line(x, y, x+pageWidth, y)
-	bc.pdf.Ln(8)
-	return nil
-}
-
-// handleImage processes and renders an image
-func (bc *BookCompiler) handleImage(src, alt string) error {
-	if !isJPEGImage(src) {
-		return fmt.Errorf("unsupported image format: %s", src)
-	}
-
-	// Add spacing before image
-	bc.pdf.Ln(defaultLineHeight)
-
-	// Get current position
-	x := bc.pdf.GetX()
-	y := bc.pdf.GetY()
-
-	// Check if image will fit on current page
-	imgInfo := bc.pdf.RegisterImage(src, "")
-	if imgInfo == nil {
-		return fmt.Errorf("failed to load image: %s", src)
-	}
-
-	imgHeight := (imgInfo.Height() * 100) / imgInfo.Width() // scaled to 100mm width
-	if y+imgHeight > bc.getPageHeight()-30 {
-		bc.pdf.AddPage()
-		y = bc.pdf.GetY()
-	}
-
-	bc.pdf.Image(src, x, y, 100, 0, false, "", 0, "")
-	bc.pdf.SetY(y + imgHeight + 5)
-
-	// Add caption if present
-	if alt != "" {
-		bc.pdf.SetFont(bc.textFont, fontStyleItalic, 10)
-		bc.pdf.Write(defaultLineHeight, alt)
-		bc.pdf.Ln(defaultLineHeight)
-	}
-
-	bc.pdf.Ln(defaultLineHeight)
-	return nil
-}
-
-// renderSiblings processes all siblings of the current node
-func (bc *BookCompiler) renderSiblings(n *html.Node) error {
-	for c := n.NextSibling; c != nil; c = c.NextSibling {
-		if err := bc.renderHTML(c); err != nil {
-			return fmt.Errorf("failed to render sibling: %w", err)
-		}
-	}
-	return nil
-}
-
-// renderListElement handles ordered and unordered lists
-func (bc *BookCompiler) renderListElement(n *html.Node) error {
-	switch n.Data {
-	case "ul", "ol":
-		bc.pdf.Ln(5)
-		if err := bc.renderChildren(n); err != nil {
-			return err
-		}
-		bc.pdf.Ln(5)
-	case "li":
-		indent := indentWidth
-		if parent := findParent(n, "li"); parent != nil {
-			indent += indentWidth // Nested list indentation
-		}
-
-		bc.pdf.SetX(bc.pdf.GetX() + indent)
-		if parent := findParent(n, "ol"); parent != nil {
-			number := countPreviousSiblings(n) + 1
-			bc.pdf.Write(defaultLineHeight, fmt.Sprintf("%d. ", number))
-		} else {
-			bc.pdf.Write(defaultLineHeight, "• ")
-		}
-		if err := bc.renderChildren(n); err != nil {
-			return err
-		}
-		bc.pdf.Ln(5)
-		bc.pdf.SetX(bc.pdf.GetX() - indent)
-	}
-	return nil
-}
-
-// renderFormattingElement handles text formatting elements
+// renderFormattingElement handles inline text formatting elements.
+// Supports emphasis (em/i), strong emphasis (strong/b), and underlining (u).
+//
+// Parameters:
+//   - n: Formatting element node to render
+//
+// Returns:
+//   - error: Any rendering errors encountered
+//
+// Supported styles:
+// - em/i: Italic text
+// - strong/b: Bold text
+// - u: Underlined text
+//
+// Note: Formatting is automatically restored to normal after rendering.
 func (bc *BookCompiler) renderFormattingElement(n *html.Node) error {
 	switch n.Data {
 	case "em", "i":
@@ -303,7 +48,20 @@ func (bc *BookCompiler) renderFormattingElement(n *html.Node) error {
 	return nil
 }
 
-// renderLink handles hyperlinks with optional colors
+// renderLink processes hyperlink elements with optional styling.
+// Links are rendered in blue to distinguish them from normal text.
+//
+// Parameters:
+//   - n: Anchor element node to render
+//
+// Returns:
+//   - error: Any rendering errors encountered
+//
+// Features:
+// - Blue color for link text
+// - Preserves href attribute
+// - Restores text color after rendering
+// - Handles empty links gracefully
 func (bc *BookCompiler) renderLink(n *html.Node) error {
 	href := getAttr(n, "href")
 	if href != "" {
@@ -315,22 +73,38 @@ func (bc *BookCompiler) renderLink(n *html.Node) error {
 	return bc.renderChildren(n)
 }
 
-// renderImage handles image elements with alt text
+// renderImage processes img elements and their associated resources.
+// Supports multiple image location strategies and alt text handling.
+//
+// Parameters:
+//   - n: Image element node to render
+//
+// Returns:
+//   - error: Image processing or path resolution errors
+//
+// Features:
+// - Chapter-aware image path resolution
+// - Multiple fallback paths for image location
+// - Alt text support for accessibility
+// - Error handling for missing images
+//
+// Related: handleImage, Chapter
 func (bc *BookCompiler) renderImage(n *html.Node) error {
 	src := getAttr(n, "src")
 	if src == "" {
 		return nil
 	}
 
-	// Find the correct image path relative to the markdown file
 	imagePath := ""
+	// Try chapter-specific image mapping first
 	if chapter, ok := bc.currentChapter.(Chapter); ok && chapter.Images != nil {
 		if fullPath, exists := chapter.Images[src]; exists {
 			imagePath = fullPath
 		}
 	}
+
+	// Fall back to path resolution if not found in chapter
 	if imagePath == "" {
-		// Try different possible paths
 		possibilities := []string{
 			src,
 			filepath.Join(bc.RootDir, src),
@@ -351,7 +125,20 @@ func (bc *BookCompiler) renderImage(n *html.Node) error {
 	return bc.handleImage(imagePath, getAttr(n, "alt"))
 }
 
-// renderBlockquote handles blockquote elements with indentation
+// renderBlockquote handles quoted text blocks with distinct styling.
+// Applies indentation and italic formatting to quoted content.
+//
+// Parameters:
+//   - n: Blockquote element node to render
+//
+// Returns:
+//   - error: Any rendering errors encountered
+//
+// Features:
+// - Left margin indentation (20mm)
+// - Italic text styling
+// - Proper spacing before and after
+// - Maintains original text alignment
 func (bc *BookCompiler) renderBlockquote(n *html.Node) error {
 	bc.pdf.SetX(bc.pdf.GetX() + 20)
 	bc.pdf.SetFont(bc.textFont, fontStyleItalic, defaultFontSize)
@@ -361,7 +148,20 @@ func (bc *BookCompiler) renderBlockquote(n *html.Node) error {
 	return err
 }
 
-// renderCode handles pre and code elements
+// renderCode handles preformatted and code block elements.
+// Uses monospace font and preserves whitespace formatting.
+//
+// Parameters:
+//   - n: Pre or code element node to render
+//
+// Returns:
+//   - error: Any rendering errors encountered
+//
+// Features:
+// - Courier font for code formatting
+// - Preserved whitespace and indentation
+// - Consistent spacing around blocks
+// - Automatic font restoration
 func (bc *BookCompiler) renderCode(n *html.Node) error {
 	bc.pdf.SetFont("Courier", fontStyleNormal, 10)
 	err := bc.renderChildren(n)
@@ -370,16 +170,53 @@ func (bc *BookCompiler) renderCode(n *html.Node) error {
 	return err
 }
 
-// Add helper to determine if spacing is needed
+// needsSpacing determines if vertical spacing should be added before an element.
+// Helps maintain consistent document spacing and readability.
+//
+// Parameters:
+//   - n: HTML node to evaluate
+//
+// Returns:
+//   - bool: true if spacing should be added, false otherwise
+//
+// Elements requiring spacing:
+// - Headings (h1-h3)
+// - Paragraphs (p)
+// - Lists (ul, ol)
+// - Tables
+// - Blockquotes
 func (bc *BookCompiler) needsSpacing(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
 	}
-	// Elements that need vertical spacing
 	spacingElements := map[string]bool{
 		"h1": true, "h2": true, "h3": true,
 		"p": true, "ul": true, "ol": true,
 		"table": true, "blockquote": true,
 	}
 	return spacingElements[n.Data]
+}
+
+// renderSiblings processes all sibling nodes in sequence.
+// Ensures proper rendering order and error propagation.
+//
+// Parameters:
+//   - n: Starting node whose siblings should be rendered
+//
+// Returns:
+//   - error: First error encountered during sibling rendering
+//
+// Features:
+// - Sequential processing of all siblings
+// - Proper error context preservation
+// - Maintains document flow
+//
+// Related: renderHTML, renderNode
+func (bc *BookCompiler) renderSiblings(n *html.Node) error {
+	for c := n.NextSibling; c != nil; c = c.NextSibling {
+		if err := bc.renderHTML(c); err != nil {
+			return fmt.Errorf("failed to render sibling: %w", err)
+		}
+	}
+	return nil
 }
