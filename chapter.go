@@ -173,14 +173,14 @@ func (bc *BookCompiler) sortChapters(chapters []Chapter) {
 
 // logWarning logs a warning message with formatting
 func (bc *BookCompiler) logWarning(format string, args ...interface{}) {
-	//if bc.Logger != nil {
+	// if bc.Logger != nil {
 	log.Printf("WARNING: "+format, args...)
 	//}
 }
 
 // logDebug logs a debug message with formatting
 func (bc *BookCompiler) logDebug(format string, args ...interface{}) {
-	//if bc.Logger != nil {
+	// if bc.Logger != nil {
 	log.Printf("DEBUG: "+format, args...)
 	//}
 }

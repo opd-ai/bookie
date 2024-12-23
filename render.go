@@ -180,7 +180,7 @@ func (bc *BookCompiler) renderBlockElement(n *html.Node) error {
 }
 
 // Helper methods for consistent styling and behavior
-func (bc *BookCompiler) setHeadingStyle(size float64, spacing float64) {
+func (bc *BookCompiler) setHeadingStyle(size, spacing float64) {
 	bc.pdf.SetFont(bc.chapterFont, fontStyleBold, size)
 	bc.pdf.Ln(spacing)
 }
